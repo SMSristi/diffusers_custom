@@ -66,7 +66,7 @@ if is_torch_xla_available():
 else:
     XLA_AVAILABLE = False
 
-from transformers import AutoModel, AutoTokenizer
+from transformers import BertModel, AutoTokenizer
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -220,28 +220,13 @@ class StableDiffusionXLPipeline(
         "negative_add_time_ids",
     ]
 
-    # def __init__(
-    #     self,
-    #     vae: AutoencoderKL,
-    #     text_encoder: AutoModel,
-    #     text_encoder_2: AutoModel,
-    #     tokenizer: AutoTokenizer,
-    #     tokenizer_2: AutoTokenizer,
-    #     unet: UNet2DConditionModel,
-    #     scheduler: KarrasDiffusionSchedulers,
-    #     image_encoder: CLIPVisionModelWithProjection = None,
-    #     feature_extractor: CLIPImageProcessor = None,
-    #     force_zeros_for_empty_prompt: bool = True,
-    #     add_watermarker: Optional[bool] = None,
-    # ):
-
     def __init__(
         self,
         vae: AutoencoderKL,
-        text_encoder: CLIPTextModel,
-        text_encoder_2: CLIPTextModelWithProjection,
-        tokenizer: CLIPTokenizer,
-        tokenizer_2: CLIPTokenizer,
+        text_encoder,
+        text_encoder_2,
+        tokenizer,
+        tokenizer_2,
         unet: UNet2DConditionModel,
         scheduler: KarrasDiffusionSchedulers,
         image_encoder: CLIPVisionModelWithProjection = None,
@@ -249,6 +234,21 @@ class StableDiffusionXLPipeline(
         force_zeros_for_empty_prompt: bool = True,
         add_watermarker: Optional[bool] = None,
     ):
+
+    # def __init__(
+    #     self,
+    #     vae: AutoencoderKL,
+    #     text_encoder: CLIPTextModel,
+    #     text_encoder_2: CLIPTextModelWithProjection,
+    #     tokenizer: CLIPTokenizer,
+    #     tokenizer_2: CLIPTokenizer,
+    #     unet: UNet2DConditionModel,
+    #     scheduler: KarrasDiffusionSchedulers,
+    #     image_encoder: CLIPVisionModelWithProjection = None,
+    #     feature_extractor: CLIPImageProcessor = None,
+    #     force_zeros_for_empty_prompt: bool = True,
+    #     add_watermarker: Optional[bool] = None,
+    # ):
         super().__init__()
 
         self.register_modules(
@@ -380,13 +380,20 @@ class StableDiffusionXLPipeline(
                 text_inputs = tokenizer(
                     prompt,
                     padding="max_length",
-                    max_length=tokenizer.model_max_length,
+                    max_length=77, #tokenizer.model_max_length,
                     truncation=True,
                     return_tensors="pt",
                 )
-
-                text_input_ids = text_inputs.input_ids
-                untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
+                if type(text_encoder) == BertModel:
+                  # Map input IDs back to tokens
+                  # tokens = tokenizer.convert_ids_to_tokens(text_inputs['input_ids'][0])
+                  # print("Token List: ", tokens)
+                  
+                  text_input_ids = text_inputs['input_ids']
+                  untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt")['input_ids']
+                else:
+                  text_input_ids = text_inputs.input_ids
+                  untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
 
                 if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
                     text_input_ids, untruncated_ids
@@ -400,7 +407,11 @@ class StableDiffusionXLPipeline(
                 prompt_embeds = text_encoder(text_input_ids.to(device), output_hidden_states=True)
 
                 # We are only ALWAYS interested in the pooled output of the final text encoder
-                pooled_prompt_embeds = prompt_embeds[0]
+                if type(text_encoder) == BertModel: 
+                  pooled_prompt_embeds = prompt_embeds[1]
+                else:
+                  pooled_prompt_embeds = prompt_embeds[0]
+                
                 if clip_skip is None:
                     prompt_embeds = prompt_embeds.hidden_states[-2]
                 else:
@@ -454,13 +465,21 @@ class StableDiffusionXLPipeline(
                     truncation=True,
                     return_tensors="pt",
                 )
-
-                negative_prompt_embeds = text_encoder(
-                    uncond_input.input_ids.to(device),
-                    output_hidden_states=True,
-                )
+                if type(text_encoder) == BertModel:
+                  negative_prompt_embeds = text_encoder(
+                      uncond_input['input_ids'].to(device),
+                      output_hidden_states=True,
+                  )
+                else:
+                  negative_prompt_embeds = text_encoder(
+                      uncond_input.input_ids.to(device),
+                      output_hidden_states=True,
+                  )
                 # We are only ALWAYS interested in the pooled output of the final text encoder
-                negative_pooled_prompt_embeds = negative_prompt_embeds[0]
+                if type(text_encoder) == BertModel:
+                  negative_pooled_prompt_embeds = negative_prompt_embeds[1] 
+                else:
+                    negative_pooled_prompt_embeds = negative_prompt_embeds[0]
                 negative_prompt_embeds = negative_prompt_embeds.hidden_states[-2]
 
                 negative_prompt_embeds_list.append(negative_prompt_embeds)
